@@ -1,0 +1,20 @@
+{
+  "234115470": {
+    "current_stage": "stage_2",
+    "current_block": null,
+    "question_index": 0,
+    "current_work": "captains_daughter",
+    "current_episode": "stage2_episode_11",
+    "current_step": 1,
+    "current_stage2_block": "awaiting_answer",
+    "current_question_type": "awaiting_answer",
+    "current_attempt_state": "awaiting_answer",
+    "current_chapter_id": "stage2_episode_11",
+    "current_question_index": 1,
+    "current_mode": "awaiting_answer"
+  },
+  "6591882915": {
+    "current_block": null,
+    "question_index": 0
+  }
+}
