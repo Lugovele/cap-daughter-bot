@@ -80,3 +80,25 @@ def save_stage2_progress(
         current_question_index=current_question_index,
         current_mode=current_mode,
     )
+
+
+def save_stage3_progress(
+    user_id: int,
+    current_episode_id: str | None,
+    current_step: int = 0,
+    current_mode: str = "episodes",
+) -> None:
+    save_user_progress(
+        user_id=user_id,
+        current_block=current_mode,
+        question_index=0,
+        current_stage="stage_3",
+        current_work="captains_daughter",
+        current_episode=current_episode_id,
+        current_step=current_step,
+        current_stage3_block=current_mode,
+        current_question_type=current_mode,
+        current_attempt_state=current_mode,
+        current_episode_id=current_episode_id,
+        current_mode=current_mode,
+    )

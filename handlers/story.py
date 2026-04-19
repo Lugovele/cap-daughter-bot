@@ -10,11 +10,12 @@ from telegram.ext import ContextTypes
 from services.llm_response import (
     detect_answer_type,
     generate_llm_reply,
+    generate_stage3_feedback,
     sanitize_user_answer,
     trim_recent_replies,
 )
 from services.message_sender import send_typing_message, split_text_to_sentences
-from services.progress import get_user_progress, save_stage2_progress, save_user_progress
+from services.progress import get_user_progress, save_stage2_progress, save_stage3_progress, save_user_progress
 
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,19 @@ CALLBACK_STAGE2_NEXT = "stage2_next"
 CALLBACK_STAGE2_CHAPTERS = "stage2_chapters"
 CALLBACK_STAGE2_MENU = "stage2_menu"
 CALLBACK_STAGE2_CONTINUE = "stage2_continue"
+STAGE3_EPISODE_KEY = "stage3_episode_id"
+STAGE3_STEP_KEY = "stage3_step"
+STAGE3_MODE_KEY = "stage3_mode"
+STAGE3_MODE_EPISODES = "episodes"
+STAGE3_MODE_TEXT = "text"
+STAGE3_MODE_OPEN_QUESTION = "open_question"
+STAGE3_MODE_FEEDBACK = "feedback"
+STAGE3_MODE_POST_FEEDBACK_NAVIGATION = "post_feedback_navigation"
+STAGE3_MODE_AWAITING_ANSWER = STAGE3_MODE_OPEN_QUESTION
+STAGE3_MODE_FINISHED_EPISODE = STAGE3_MODE_POST_FEEDBACK_NAVIGATION
+STAGE3_EPISODE_PREFIX = "stage3_episode_"
+CALLBACK_STAGE3_NEXT = "stage3_next"
+CALLBACK_STAGE3_EPISODES = "stage3_episodes"
 
 
 def get_block_map(context: ContextTypes.DEFAULT_TYPE) -> dict[str, dict]:
@@ -99,6 +113,29 @@ def get_stage2_chapter_id(chapter: dict) -> str:
 
 def get_stage2_chapter_label(chapter: dict) -> str:
     return str(chapter.get("menu_label") or chapter.get("title") or get_stage2_chapter_id(chapter))
+
+
+def get_stage3_content(context: ContextTypes.DEFAULT_TYPE) -> dict:
+    return context.application.bot_data["stage_3"]
+
+
+def get_stage3_episodes(context: ContextTypes.DEFAULT_TYPE) -> list[dict]:
+    return get_stage3_content(context).get("episodes", [])
+
+
+def get_stage3_episode_id(episode: dict) -> str:
+    return str(episode.get("key") or episode.get("id"))
+
+
+def get_stage3_episode_label(episode: dict) -> str:
+    return str(episode.get("menu_label") or episode.get("title") or get_stage3_episode_id(episode))
+
+
+def get_stage3_episode_map(context: ContextTypes.DEFAULT_TYPE) -> dict[str, dict]:
+    return {
+        get_stage3_episode_id(episode): episode
+        for episode in get_stage3_episodes(context)
+    }
 
 
 def format_stage2_question(question: str, options: list[str] | None = None) -> str:
@@ -340,6 +377,33 @@ def build_stage2_continue_inline_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def build_stage3_episodes_inline_keyboard(
+    context: ContextTypes.DEFAULT_TYPE,
+) -> InlineKeyboardMarkup:
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                get_stage3_episode_label(episode),
+                callback_data=f"{STAGE3_EPISODE_PREFIX}{get_stage3_episode_id(episode)}",
+            )
+        ]
+        for episode in get_stage3_episodes(context)
+    ]
+    keyboard.append([InlineKeyboardButton("*Назад к содержанию", callback_data=CALLBACK_MENU_CONTENTS)])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_stage3_finished_inline_keyboard(
+    has_next_episode: bool,
+) -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton("*Продолжить", callback_data=CALLBACK_STAGE3_NEXT)],
+        [InlineKeyboardButton("*Назад к эпизодам", callback_data=CALLBACK_STAGE3_EPISODES)],
+        [InlineKeyboardButton("*Назад к содержанию", callback_data=CALLBACK_MENU_CONTENTS)],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 def set_contents_mode(context: ContextTypes.DEFAULT_TYPE, is_active: bool) -> None:
     context.user_data["awaiting_contents_choice"] = is_active
 
@@ -406,6 +470,43 @@ def get_stage2_state(
         or STAGE2_MODE_CHAPTERS,
     )
     return chapter_id, question_index, mode
+
+
+def set_stage3_state(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    episode_id: str | None,
+    step: int = 0,
+    mode: str = STAGE3_MODE_EPISODES,
+) -> None:
+    context.user_data[CURRENT_STAGE_KEY] = STAGE_3
+    context.user_data["current_work"] = "captains_daughter"
+    context.user_data["current_episode"] = episode_id
+    context.user_data["current_step"] = step
+    context.user_data["current_block"] = mode
+    context.user_data["current_question_type"] = mode
+    context.user_data["current_attempt_state"] = mode
+    context.user_data[STAGE3_EPISODE_KEY] = episode_id
+    context.user_data[STAGE3_STEP_KEY] = step
+    context.user_data[STAGE3_MODE_KEY] = mode
+
+
+def get_stage3_state(
+    context: ContextTypes.DEFAULT_TYPE, user_id: int
+) -> tuple[str | None, int, str]:
+    progress = get_user_progress(user_id) or {}
+    episode_id = context.user_data.get(
+        STAGE3_EPISODE_KEY,
+        progress.get("current_episode_id") or progress.get("current_episode"),
+    )
+    step = int(context.user_data.get(STAGE3_STEP_KEY, progress.get("current_step", 0) or 0))
+    mode = context.user_data.get(
+        STAGE3_MODE_KEY,
+        progress.get("current_mode")
+        or progress.get("current_stage3_block")
+        or STAGE3_MODE_EPISODES,
+    )
+    return episode_id, step, mode
 
 
 def get_current_stage(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
@@ -750,6 +851,128 @@ async def send_stage2_finished_menu(
     )
 
 
+async def show_stage3_episodes_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+    flow_id = get_flow_id(context)
+    set_contents_mode(context, True)
+    stage3 = get_stage3_content(context)
+    episodes = get_stage3_episodes(context)
+    if not episodes:
+        await send_guarded_message(
+            chat_id,
+            context,
+            flow_id,
+            "Этап 3. Цитаты пока не содержит эпизодов.",
+        )
+        return
+
+    await send_guarded_message(
+        chat_id,
+        context,
+        flow_id,
+        f"{stage3['title']}\n\n{stage3.get('description', stage3.get('episode_menu_title', 'Выбери эпизод:'))}",
+        reply_markup=build_stage3_episodes_inline_keyboard(context),
+    )
+
+
+async def send_stage3_open_question(
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    episode_id: str,
+    flow_id: str,
+) -> None:
+    episode = get_stage3_episode_map(context)[episode_id]
+    set_stage3_state(
+        context,
+        episode_id=episode_id,
+        step=1,
+        mode=STAGE3_MODE_OPEN_QUESTION,
+    )
+    save_stage3_progress(user_id, episode_id, 1, STAGE3_MODE_OPEN_QUESTION)
+    question_text = episode.get("question", "Как ты думаешь, что здесь важно?")
+    await send_guarded_message(chat_id, context, flow_id, question_text)
+
+async def send_stage3_episode(
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    episode_id: str,
+    flow_id: str,
+) -> None:
+    episode = get_stage3_episode_map(context)[episode_id]
+    set_contents_mode(context, False)
+    logger.info("[DEBUG] stage3 episode opened: %s", episode_id)
+    set_stage3_state(
+        context,
+        episode_id=episode_id,
+        step=0,
+        mode=STAGE3_MODE_TEXT,
+    )
+    save_stage3_progress(user_id, episode_id, 0, STAGE3_MODE_TEXT)
+
+    sent = await send_guarded_message(chat_id, context, flow_id, episode["title"])
+    if not sent:
+        return
+
+    for part in split_text_to_sentences(episode.get("text", "")):
+        sent = await send_guarded_message(chat_id, context, flow_id, part)
+        if not sent:
+            return
+
+    await send_stage3_open_question(chat_id, context, user_id, episode_id, flow_id)
+
+
+def get_next_stage3_episode_id(context: ContextTypes.DEFAULT_TYPE, episode_id: str) -> str | None:
+    episodes = get_stage3_episodes(context)
+    episode_map = get_stage3_episode_map(context)
+    for index, episode in enumerate(episodes):
+        if get_stage3_episode_id(episode) == episode_id:
+            navigation = episode.get("navigation") or {}
+            next_episode = navigation.get("next_episode")
+            if next_episode is not None:
+                next_episode_id = str(next_episode)
+                if next_episode_id in episode_map:
+                    return next_episode_id
+                next_episode_key = f"stage3_episode_{next_episode_id}"
+                if next_episode_key in episode_map:
+                    return next_episode_key
+            if index + 1 < len(episodes):
+                return get_stage3_episode_id(episodes[index + 1])
+    return None
+
+
+async def send_stage3_finished_menu(
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    episode_id: str,
+    flow_id: str,
+) -> None:
+    episode = get_stage3_episode_map(context)[episode_id]
+    takeaway = episode.get("takeaway")
+    if takeaway:
+        sent = await send_guarded_message(chat_id, context, flow_id, takeaway)
+        if not sent:
+            return
+
+    set_stage3_state(
+        context,
+        episode_id=episode_id,
+        step=3,
+        mode=STAGE3_MODE_POST_FEEDBACK_NAVIGATION,
+    )
+    save_stage3_progress(user_id, episode_id, 3, STAGE3_MODE_POST_FEEDBACK_NAVIGATION)
+    await send_guarded_message(
+        chat_id,
+        context,
+        flow_id,
+        "Эпизод завершён. Что делаем дальше?",
+        reply_markup=build_stage3_finished_inline_keyboard(
+            get_next_stage3_episode_id(context, episode_id) is not None
+        ),
+    )
+
+
 async def send_current_question(
     chat_id: int,
     context: ContextTypes.DEFAULT_TYPE,
@@ -859,6 +1082,34 @@ async def handle_user_response(
         await show_menu(chat_id, context)
         return
 
+    if text.startswith("*"):
+        flow_id = interrupt_flow(context)
+        current_stage, _, _, _ = get_dialog_state(context, user_id)
+        logger.info("[DEBUG] star command received: %s", text)
+        lowered_text = text.lower()
+        if "содержание" in lowered_text:
+            start_flow_task(context, show_contents_menu(chat_id, context))
+            return
+        if "эпизод" in lowered_text and current_stage == STAGE_3:
+            save_stage3_progress(user_id, None, 0, STAGE3_MODE_EPISODES)
+            set_stage3_state(context, episode_id=None, step=0, mode=STAGE3_MODE_EPISODES)
+            start_flow_task(context, show_stage3_episodes_menu(chat_id, context))
+            return
+        if "продолж" in lowered_text and current_stage == STAGE_3:
+            episode_id, _, mode = get_stage3_state(context, user_id)
+            if mode == STAGE3_MODE_POST_FEEDBACK_NAVIGATION and episode_id:
+                next_episode_id = get_next_stage3_episode_id(context, episode_id)
+                if next_episode_id:
+                    start_flow_task(context, send_stage3_episode(chat_id, context, user_id, next_episode_id, flow_id))
+                    return
+            if mode == STAGE3_MODE_OPEN_QUESTION and episode_id:
+                start_flow_task(context, send_stage3_open_question(chat_id, context, user_id, episode_id, flow_id))
+                return
+            start_flow_task(context, show_stage3_episodes_menu(chat_id, context))
+            return
+        await send_guarded_message(chat_id, context, flow_id, "Открою меню, чтобы не принять служебную команду за ответ.")
+        start_flow_task(context, show_menu(chat_id, context))
+        return
     progress = get_user_progress(user_id)
     current_stage, block_id, question_index, awaiting_answer = get_dialog_state(context, user_id)
 
@@ -997,6 +1248,66 @@ async def handle_user_response(
         await send_stage2_takeaway(chat_id, context, user_id, chapter_id, flow_id)
         return
 
+    if current_stage == STAGE_3:
+        flow_id = interrupt_flow(context)
+        episode_id, stage3_step, mode = get_stage3_state(context, user_id)
+        logger.info(
+            "[DEBUG] stage3 answer received episode=%s step=%s block=%s",
+            episode_id,
+            stage3_step,
+            mode,
+        )
+
+        if mode != STAGE3_MODE_OPEN_QUESTION or not episode_id:
+            if mode == STAGE3_MODE_POST_FEEDBACK_NAVIGATION and episode_id:
+                await send_stage3_finished_menu(chat_id, context, user_id, episode_id, flow_id)
+                return
+
+            await send_guarded_message(
+                chat_id,
+                context,
+                flow_id,
+                "Сначала выбери эпизод этапа 3.",
+            )
+            start_flow_task(context, show_stage3_episodes_menu(chat_id, context))
+            return
+
+        episode = get_stage3_episode_map(context).get(episode_id)
+        if not episode:
+            set_stage3_state(context, episode_id=None, mode=STAGE3_MODE_EPISODES)
+            save_stage3_progress(user_id, None, 0, STAGE3_MODE_EPISODES)
+            await send_guarded_message(
+                chat_id,
+                context,
+                flow_id,
+                "Этот эпизод не найден. Открою список эпизодов этапа 3.",
+            )
+            start_flow_task(context, show_stage3_episodes_menu(chat_id, context))
+            return
+
+        set_stage3_state(
+            context,
+            episode_id=episode_id,
+            step=2,
+            mode=STAGE3_MODE_FEEDBACK,
+        )
+        save_stage3_progress(user_id, episode_id, 2, STAGE3_MODE_FEEDBACK)
+        feedback, used_ai = await generate_stage3_feedback(
+            episode_text=episode.get("text", ""),
+            question=episode.get("question", ""),
+            user_answer=text,
+            core_meanings=episode.get("core_meanings", []),
+            good_answer_signals=episode.get("good_answer_signals", []),
+            common_mistakes=episode.get("common_mistakes", []),
+            reaction_style=episode.get("reaction_style", ""),
+        )
+        logger.info("[DEBUG] stage3 AI feedback generated=%s", used_ai)
+        sent = await send_guarded_message(chat_id, context, flow_id, feedback)
+        if not sent:
+            return
+
+        await send_stage3_finished_menu(chat_id, context, user_id, episode_id, flow_id)
+        return
     if not progress or not progress.get("current_block"):
         flow_id = interrupt_flow(context)
         await send_guarded_message(
@@ -1190,6 +1501,42 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             start_flow_task(context, show_stage2_chapters_menu(query.message.chat_id, context))
             return
 
+        if current_stage == STAGE_3:
+            flow_id = interrupt_flow(context)
+            episode_id, stage3_step, mode = get_stage3_state(context, user_id)
+            await send_guarded_message(
+                query.message.chat_id,
+                context,
+                flow_id,
+                "Продолжаем 👇",
+            )
+            if mode == STAGE3_MODE_AWAITING_ANSWER and episode_id:
+                start_flow_task(
+                    context,
+                    send_stage3_open_question(
+                        query.message.chat_id,
+                        context,
+                        user_id,
+                        episode_id,
+                        flow_id,
+                    ),
+                )
+                return
+            if mode == STAGE3_MODE_FINISHED_EPISODE and episode_id:
+                start_flow_task(
+                    context,
+                    send_stage3_finished_menu(
+                        query.message.chat_id,
+                        context,
+                        user_id,
+                        episode_id,
+                        flow_id,
+                    ),
+                )
+                return
+            start_flow_task(context, show_stage3_episodes_menu(query.message.chat_id, context))
+            return
+
         if current_stage != STAGE_1:
             flow_id = interrupt_flow(context)
             set_current_stage(context, current_stage)
@@ -1331,6 +1678,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
             logger.info("[DEBUG] flow interrupted by menu action")
             start_flow_task(context, show_stage2_chapters_menu(query.message.chat_id, context))
+            return
+
+        if stage_id == STAGE_3:
+            save_stage3_progress(user_id, None, 0, STAGE3_MODE_EPISODES)
+            set_stage3_state(
+                context,
+                episode_id=None,
+                step=0,
+                mode=STAGE3_MODE_EPISODES,
+            )
+            logger.info("[DEBUG] flow interrupted by menu action")
+            start_flow_task(context, show_stage3_episodes_menu(query.message.chat_id, context))
             return
 
         if stage_id in STAGE_PLACEHOLDERS:
@@ -1504,4 +1863,62 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "Открываю меню 👇",
         )
         start_flow_task(context, show_menu(query.message.chat_id, context))
+        return
+
+    if data.startswith(STAGE3_EPISODE_PREFIX):
+        episode_id = data[len(STAGE3_EPISODE_PREFIX) :]
+        logger.info("[DEBUG] stage3 episode selected: %s", episode_id)
+        flow_id = interrupt_flow(context)
+        user_id = update.effective_user.id
+        if episode_id not in get_stage3_episode_map(context):
+            await send_guarded_message(
+                query.message.chat_id,
+                context,
+                flow_id,
+                "Такого эпизода этапа 3 нет. Открою список эпизодов.",
+            )
+            start_flow_task(context, show_stage3_episodes_menu(query.message.chat_id, context))
+            return
+
+        start_flow_task(
+            context,
+            send_stage3_episode(query.message.chat_id, context, user_id, episode_id, flow_id),
+        )
+        return
+
+    if data == CALLBACK_STAGE3_NEXT:
+        logger.info("[DEBUG] stage3 navigation selected: continue")
+        flow_id = interrupt_flow(context)
+        user_id = update.effective_user.id
+        episode_id, _, _ = get_stage3_state(context, user_id)
+        next_episode_id = get_next_stage3_episode_id(context, episode_id or "")
+        if not next_episode_id:
+            await send_guarded_message(
+                query.message.chat_id,
+                context,
+                flow_id,
+                "Этап 3 уже завершён. Открою список эпизодов.",
+            )
+            start_flow_task(context, show_stage3_episodes_menu(query.message.chat_id, context))
+            return
+
+        start_flow_task(
+            context,
+            send_stage3_episode(
+                query.message.chat_id,
+                context,
+                user_id,
+                next_episode_id,
+                flow_id,
+            ),
+        )
+        return
+
+    if data == CALLBACK_STAGE3_EPISODES:
+        logger.info("[DEBUG] stage3 navigation selected: episodes")
+        flow_id = interrupt_flow(context)
+        user_id = update.effective_user.id
+        save_stage3_progress(user_id, None, 0, STAGE3_MODE_EPISODES)
+        set_stage3_state(context, episode_id=None, step=0, mode=STAGE3_MODE_EPISODES)
+        start_flow_task(context, show_stage3_episodes_menu(query.message.chat_id, context))
         return

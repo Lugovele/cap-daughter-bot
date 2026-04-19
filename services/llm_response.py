@@ -327,3 +327,182 @@ async def generate_llm_reply(
         return reply, True, True, answer_type
 
     return get_universal_fallback_reply(), True, False, answer_type
+
+STAGE3_SYSTEM_PROMPT = """
+Ты — внимательный, живой и доброжелательный преподаватель литературы.
+Ты помогаешь подростку понять «Капитанскую дочку» через подробный адаптированный пересказ, близкий к оригиналу.
+Твоя задача — дать содержательную реакцию именно на ответ ученика по текущему эпизоду.
+
+Правила реакции:
+- отвечай по-русски
+- 2–4 коротких предложения
+- сначала признай то, что ученик уловил или попытался уловить
+- затем мягко развей, уточни или верни мысль к сути сцены
+- опирайся на конкретный ответ ученика и на данный эпизод
+- не отвечай универсальной фразой, которую можно вставить к любому ответу
+- не повторяй вопрос
+- не используй слова: "неправильно", "ошибка", "неверно"
+- не будь сухим экзаменатором
+- не пересказывай весь эпизод заново
+- звучишь как спокойный умный преподаватель, который ведёт рядом
+""".strip()
+
+STAGE3_REGEN_INSTRUCTIONS = """
+Предыдущая реакция получилась слишком общей или неудачной.
+Скажи конкретно, на какую мысль ученика ты отвечаешь.
+Мягко свяжи ответ ученика с ключевым смыслом эпизода.
+Не используй слова "неправильно", "ошибка", "неверно".
+""".strip()
+
+STAGE3_FORBIDDEN_WORDS = {"неправильно", "ошибка", "неверно"}
+STAGE3_GENERIC_REPLIES = {
+    "интересная мысль",
+    "интересная мысль.",
+    "хорошее наблюдение",
+    "хорошее наблюдение.",
+    "да, в этом есть смысл",
+    "да, в этом есть смысл.",
+    "тут ты уловил важный момент",
+    "тут ты уловил важный момент.",
+}
+STAGE3_MAX_OUTPUT_TOKENS = 180
+STAGE3_MAX_REPLY_LENGTH = 520
+
+
+def _format_stage3_list(items: list[str] | None) -> str:
+    if not items:
+        return "не указано"
+    return "\n".join(f"- {item}" for item in items)
+
+
+def _shorten_stage3_feedback(text: str) -> str:
+    cleaned = " ".join(text.split()).strip()
+    if not cleaned:
+        return ""
+
+    sentences: list[str] = []
+    current = ""
+    for char in cleaned:
+        current += char
+        if char in ".!?":
+            sentences.append(current.strip())
+            current = ""
+
+    if current.strip():
+        sentences.append(current.strip())
+
+    shortened = " ".join(sentences[:4]) if sentences else cleaned
+    if len(shortened) <= STAGE3_MAX_REPLY_LENGTH:
+        return shortened
+
+    cut = shortened[:STAGE3_MAX_REPLY_LENGTH].rstrip()
+    last_punct = max(cut.rfind("."), cut.rfind("!"), cut.rfind("?"))
+    if last_punct > 80:
+        return cut[: last_punct + 1].strip()
+    return cut.rstrip(",;:- ") + "."
+
+
+def _contains_stage3_forbidden_words(reply: str) -> bool:
+    normalized = normalize_user_answer(reply)
+    return any(word in normalized for word in STAGE3_FORBIDDEN_WORDS)
+
+
+def _build_stage3_user_prompt(
+    *,
+    episode_text: str,
+    question: str,
+    user_answer: str,
+    core_meanings: list[str] | None,
+    good_answer_signals: list[str] | None,
+    common_mistakes: list[str] | None,
+    reaction_style: str | None,
+) -> str:
+    return (
+        f"Эпизод:\n{episode_text}\n\n"
+        f"Вопрос:\n{question}\n\n"
+        f"Ответ пользователя:\n{user_answer}\n\n"
+        f"Ключевые смыслы сцены:\n{_format_stage3_list(core_meanings)}\n\n"
+        f"Признаки хорошего ответа:\n{_format_stage3_list(good_answer_signals)}\n\n"
+        f"Типичные ошибки понимания:\n{_format_stage3_list(common_mistakes)}\n\n"
+        f"Стиль реакции:\n{reaction_style or 'поддерживающий, спокойный, содержательный'}\n\n"
+        "Сформулируй короткую, живую, педагогически точную реакцию на ответ пользователя. "
+        "Нужно сначала показать, что ты понял его мысль, затем мягко развить или уточнить её. "
+        "Если ответ поверхностный или уходит в сторону, спокойно верни к сути сцены. "
+        "Не повторяй вопрос и не отвечай шаблонно."
+    )
+
+
+def _build_stage3_fallback_feedback(
+    *,
+    user_answer: str,
+    core_meanings: list[str] | None,
+) -> str:
+    first_meaning = (core_meanings or ["важно увидеть внутренний смысл сцены"])[0]
+    answer = sanitize_user_answer(user_answer)
+    if answer:
+        return _shorten_stage3_feedback(
+            f"Я вижу, от какой мысли ты отталкиваешься: {answer}. "
+            f"Здесь стоит связать это с главным смыслом эпизода: {first_meaning}. "
+            "Попробуй держать в центре не только событие, но и то, что оно говорит о характере героя."
+        )
+    return _shorten_stage3_feedback(
+        f"Можно начать с самого главного: {first_meaning}. "
+        "В этом эпизоде важны не только события, но и внутренняя опора, которую герой получает перед взрослой жизнью."
+    )
+
+
+async def generate_stage3_feedback(
+    *,
+    episode_text: str,
+    question: str,
+    user_answer: str,
+    core_meanings: list[str] | None = None,
+    good_answer_signals: list[str] | None = None,
+    common_mistakes: list[str] | None = None,
+    reaction_style: str | None = None,
+) -> tuple[str, bool]:
+    sanitized_answer = sanitize_user_answer(user_answer)
+    client = _get_client()
+    if client is None:
+        logger.warning("[DEBUG] stage3 AI feedback fallback: OPENAI_API_KEY missing")
+        return _build_stage3_fallback_feedback(
+            user_answer=sanitized_answer,
+            core_meanings=core_meanings,
+        ), False
+
+    user_prompt = _build_stage3_user_prompt(
+        episode_text=episode_text,
+        question=question,
+        user_answer=sanitized_answer,
+        core_meanings=core_meanings,
+        good_answer_signals=good_answer_signals,
+        common_mistakes=common_mistakes,
+        reaction_style=reaction_style,
+    )
+
+    for attempt in range(2):
+        instructions = STAGE3_SYSTEM_PROMPT
+        if attempt == 1:
+            instructions = f"{instructions}\n\n{STAGE3_REGEN_INSTRUCTIONS}"
+
+        for model_name in LLM_MODEL_CANDIDATES:
+            try:
+                logger.info("[DEBUG] stage3 trying_model=%s attempt=%s", model_name, attempt + 1)
+                response = await client.responses.create(
+                    model=model_name,
+                    max_output_tokens=STAGE3_MAX_OUTPUT_TOKENS,
+                    temperature=LLM_TEMPERATURE,
+                    instructions=instructions,
+                    input=user_prompt,
+                )
+                reply = _shorten_stage3_feedback(response.output_text or "")
+                if reply and not is_generic_reply(reply) and normalize_user_answer(reply) not in STAGE3_GENERIC_REPLIES and not _contains_stage3_forbidden_words(reply):
+                    return reply, True
+            except Exception:
+                logger.exception("[DEBUG] Stage 3 OpenAI generation failed for model=%s", model_name)
+
+    logger.warning("[DEBUG] stage3 AI feedback fallback: generation failed")
+    return _build_stage3_fallback_feedback(
+        user_answer=sanitized_answer,
+        core_meanings=core_meanings,
+    ), False

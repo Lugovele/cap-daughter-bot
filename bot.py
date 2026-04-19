@@ -20,6 +20,7 @@ from services.message_sender import configure_bot
 BASE_DIR = Path(__file__).resolve().parent
 CONTENT_PATH = BASE_DIR / "content" / "captains_daughter.json"
 STAGE2_CONTENT_PATH = BASE_DIR / "content" / "stage2_retelling.json"
+STAGE3_CONTENT_PATH = BASE_DIR / "content" / "stage3_adapted.json"
 
 
 logging.basicConfig(
@@ -39,12 +40,19 @@ def load_stage2_content() -> dict:
         return json.load(file)
 
 
+def load_stage3_content() -> dict:
+    with STAGE3_CONTENT_PATH.open("r", encoding="utf-8") as file:
+        return json.load(file)
+
+
 async def post_init(application: Application) -> None:
     configure_bot(application.bot)
     application.bot_data["course"] = load_course()
     application.bot_data["stage_2"] = load_stage2_content()
+    application.bot_data["stage_3"] = load_stage3_content()
     logger.info("Course loaded: %s", application.bot_data["course"]["course_title"])
     logger.info("Stage 2 loaded: %s", application.bot_data["stage_2"]["title"])
+    logger.info("Stage 3 loaded: %s", application.bot_data["stage_3"]["title"])
 
 
 def build_application() -> Application:
