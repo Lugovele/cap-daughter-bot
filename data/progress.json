@@ -1,16 +1,10 @@
 {
   "234115470": {
-    "current_stage": "stage_3",
-    "current_block": "episodes",
+    "current_stage": "stage_1",
+    "current_block": "block_9",
     "question_index": 0,
-    "current_work": "captains_daughter",
-    "current_episode": null,
-    "current_step": 0,
-    "current_stage3_block": "episodes",
-    "current_question_type": "episodes",
-    "current_attempt_state": "episodes",
-    "current_episode_id": null,
-    "current_mode": "episodes"
+    "attempt_count": 0,
+    "question_status": "waiting_user_answer"
   },
   "6591882915": {
     "current_block": null,

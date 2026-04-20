@@ -64,6 +64,8 @@ def save_stage2_progress(
     current_chapter_id: str | None,
     current_question_index: int = 0,
     current_mode: str = "chapters",
+    attempt_count: int = 0,
+    question_status: str = "waiting_user_answer",
 ) -> None:
     save_user_progress(
         user_id=user_id,
@@ -75,10 +77,12 @@ def save_stage2_progress(
         current_step=current_question_index,
         current_stage2_block=current_mode,
         current_question_type=current_mode,
-        current_attempt_state=current_mode,
+        current_attempt_state=question_status,
         current_chapter_id=current_chapter_id,
         current_question_index=current_question_index,
         current_mode=current_mode,
+        attempt_count=attempt_count,
+        question_status=question_status,
     )
 
 
@@ -87,6 +91,8 @@ def save_stage3_progress(
     current_episode_id: str | None,
     current_step: int = 0,
     current_mode: str = "episodes",
+    attempt_count: int = 0,
+    question_status: str = "waiting_user_answer",
 ) -> None:
     save_user_progress(
         user_id=user_id,
@@ -98,7 +104,9 @@ def save_stage3_progress(
         current_step=current_step,
         current_stage3_block=current_mode,
         current_question_type=current_mode,
-        current_attempt_state=current_mode,
+        current_attempt_state=question_status,
         current_episode_id=current_episode_id,
         current_mode=current_mode,
+        attempt_count=attempt_count,
+        question_status=question_status,
     )

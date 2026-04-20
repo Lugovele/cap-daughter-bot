@@ -5,6 +5,7 @@ from handlers.story import (
     STAGE_1,
     STAGE_TITLES,
     build_main_keyboard,
+    build_menu_inline_keyboard,
     get_current_stage,
     get_block_map,
     get_block_title,
@@ -26,14 +27,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     saved_progress = get_user_progress(user_id)
     saved_stage = (saved_progress or {}).get("current_stage", STAGE_1)
     current_block = (saved_progress or {}).get("current_block") or "intro"
-    if saved_stage != STAGE_1:
-        reset_user_progress(user_id)
-        saved_progress = get_user_progress(user_id)
-        current_block = "intro"
-    flow_id = interrupt_flow(context)
+    current_question = int((saved_progress or {}).get("question_index", 0) or 0)
+
+    interrupt_flow(context)
     set_contents_mode(context, False)
 
-    if saved_progress is None:
+    if saved_progress is None or saved_stage != STAGE_1 or not current_block:
         reset_user_progress(user_id)
         reset_recent_replies(context)
         reset_dont_know_count(context)
@@ -44,63 +43,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             question_index=0,
             awaiting_answer=False,
         )
-        await send_typing_message(
-            update.effective_chat.id,
-            "Привет. Мы будем изучать «Капитанскую дочку» по шагам.",
-            reply_markup=build_main_keyboard(),
-        )
-        start_flow_task(
-            context,
-            send_block(update.effective_chat.id, context, "intro", flow_id),
-        )
-        return
-
-    if not current_block:
-        reset_user_progress(user_id)
-        reset_recent_replies(context)
-        reset_dont_know_count(context)
+    else:
         set_dialog_state(
             context,
             current_stage=STAGE_1,
-            current_block="intro",
-            question_index=0,
-            awaiting_answer=False,
+            current_block=current_block,
+            question_index=current_question,
+            awaiting_answer=True,
         )
-        await send_typing_message(
-            update.effective_chat.id,
-            "Начнём сначала.",
-            reply_markup=build_main_keyboard(),
-        )
-        start_flow_task(
-            context,
-            send_block(update.effective_chat.id, context, "intro", flow_id),
-        )
-        return
-
-    block = get_block_map(context)[current_block]
-    current_question = saved_progress.get("question_index", 0)
-    set_dialog_state(
-        context,
-        current_stage=STAGE_1,
-        current_block=current_block,
-        question_index=current_question,
-        awaiting_answer=True,
-    )
 
     await send_typing_message(
         update.effective_chat.id,
-        f"Продолжим раздел: {get_block_title(block)}.",
-        reply_markup=build_main_keyboard(),
-    )
-    start_flow_task(
-        context,
-        send_current_question(
-            update.effective_chat.id,
-            context,
-            current_block,
-            current_question,
-            flow_id,
-        ),
+        'Бот поможет понять «Капитанскую дочку» через сюжет и вопросы\n\nВыбери, что сделать:',
+        reply_markup=build_menu_inline_keyboard(),
     )
 
 
