@@ -24,19 +24,13 @@ MENU_BUTTON = "📍 Меню"
 STAGE_1 = "stage_1"
 STAGE_2 = "stage_2"
 STAGE_3 = "stage_3"
-STAGE_4 = "stage_4"
 DEFAULT_STAGE = STAGE_1
 STAGE_TITLES = {
-    STAGE_1: "Этап 1. Сюжет",
-    STAGE_2: "Этап 2. Пересказ",
-    STAGE_3: "Этап 3. Цитаты",
-    STAGE_4: "Этап 4. С комментариями",
+    STAGE_1: "1. Герои и сюжет",
+    STAGE_2: "2. Пересказ",
+    STAGE_3: "3. С цитатами",
 }
-STAGE_PLACEHOLDERS = {
-    STAGE_2: "Этап 2. Пересказ скоро будет заполнен. Пока можно вернуться в меню или выбрать другой этап.",
-    STAGE_3: "Этап 3. Цитаты скоро будет заполнен. Пока можно вернуться в меню или выбрать другой этап.",
-    STAGE_4: "Этап 4. С комментариями скоро будет заполнен. Пока можно вернуться в меню или выбрать другой этап.",
-}
+STAGE_PLACEHOLDERS = {}
 RECENT_REPLIES_KEY = "recent_bot_replies"
 FLOW_ID_KEY = "flow_id"
 FLOW_TASK_KEY = "flow_task"
@@ -55,13 +49,13 @@ STAGE2_MODE_FINISHED_CHAPTER = "finished_chapter"
 
 CALLBACK_MENU_CONTINUE = "menu_continue"
 CALLBACK_MENU_RESTART = "menu_restart"
-CALLBACK_MENU_CONTENTS = "menu_contents"
+CALLBACK_MENU_HELP = "help"
+CALLBACK_MENU_OPEN = "menu_open"
 STAGE_CALLBACK_PREFIX = "select_"
 BLOCK_CALLBACK_PREFIX = "jump_"
 STAGE2_CHAPTER_PREFIX = "stage2_chapter_"
 CALLBACK_STAGE2_NEXT = "stage2_next"
 CALLBACK_STAGE2_CHAPTERS = "stage2_chapters"
-CALLBACK_STAGE2_MENU = "stage2_menu"
 CALLBACK_STAGE2_CONTINUE = "stage2_continue"
 STAGE3_EPISODE_KEY = "stage3_episode_id"
 STAGE3_STEP_KEY = "stage3_step"
@@ -311,23 +305,25 @@ def build_main_keyboard() -> ReplyKeyboardMarkup:
 def build_menu_inline_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("▶️ Продолжить", callback_data=CALLBACK_MENU_CONTINUE)],
-        [InlineKeyboardButton("🔁 Начать заново", callback_data=CALLBACK_MENU_RESTART)],
-        [InlineKeyboardButton("📚 Содержание", callback_data=CALLBACK_MENU_CONTENTS)],
+        [InlineKeyboardButton("🔄 Начать заново", callback_data=CALLBACK_MENU_RESTART)],
+        [InlineKeyboardButton("ℹ️ Как пользоваться", callback_data=CALLBACK_MENU_HELP)],
+        *[
+            [
+                InlineKeyboardButton(
+                    title,
+                    callback_data=f"{STAGE_CALLBACK_PREFIX}{stage_id}",
+                )
+            ]
+            for stage_id, title in STAGE_TITLES.items()
+        ],
     ]
     return InlineKeyboardMarkup(keyboard)
 
 
-def build_contents_inline_keyboard(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                title,
-                callback_data=f"{STAGE_CALLBACK_PREFIX}{stage_id}",
-            )
-        ]
-        for stage_id, title in STAGE_TITLES.items()
-    ]
-    return InlineKeyboardMarkup(keyboard)
+def build_menu_only_inline_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Меню", callback_data=CALLBACK_MENU_OPEN)]]
+    )
 
 
 def build_stage_1_contents_inline_keyboard(
@@ -365,15 +361,15 @@ def build_stage2_finished_inline_keyboard(
 ) -> InlineKeyboardMarkup:
     keyboard = []
     if has_next_chapter:
-        keyboard.append([InlineKeyboardButton("*Продолжить", callback_data=CALLBACK_STAGE2_NEXT)])
-    keyboard.append([InlineKeyboardButton("*Назад к эпизодам", callback_data=CALLBACK_STAGE2_CHAPTERS)])
-    keyboard.append([InlineKeyboardButton("*Назад к содержанию", callback_data=CALLBACK_MENU_CONTENTS)])
+        keyboard.append([InlineKeyboardButton("Продолжить", callback_data=CALLBACK_STAGE2_NEXT)])
+    keyboard.append([InlineKeyboardButton("Назад к эпизодам", callback_data=CALLBACK_STAGE2_CHAPTERS)])
+    keyboard.append([InlineKeyboardButton("Меню", callback_data=CALLBACK_MENU_OPEN)])
     return InlineKeyboardMarkup(keyboard)
 
 
 def build_stage2_continue_inline_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("*Продолжить", callback_data=CALLBACK_STAGE2_CONTINUE)]]
+        [[InlineKeyboardButton("Продолжить", callback_data=CALLBACK_STAGE2_CONTINUE)]]
     )
 
 
@@ -389,7 +385,7 @@ def build_stage3_episodes_inline_keyboard(
         ]
         for episode in get_stage3_episodes(context)
     ]
-    keyboard.append([InlineKeyboardButton("*Назад к содержанию", callback_data=CALLBACK_MENU_CONTENTS)])
+    keyboard.append([InlineKeyboardButton("Меню", callback_data=CALLBACK_MENU_OPEN)])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -397,9 +393,9 @@ def build_stage3_finished_inline_keyboard(
     has_next_episode: bool,
 ) -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton("*Продолжить", callback_data=CALLBACK_STAGE3_NEXT)],
-        [InlineKeyboardButton("*Назад к эпизодам", callback_data=CALLBACK_STAGE3_EPISODES)],
-        [InlineKeyboardButton("*Назад к содержанию", callback_data=CALLBACK_MENU_CONTENTS)],
+        [InlineKeyboardButton("Продолжить", callback_data=CALLBACK_STAGE3_NEXT)],
+        [InlineKeyboardButton("Назад к эпизодам", callback_data=CALLBACK_STAGE3_EPISODES)],
+        [InlineKeyboardButton("Меню", callback_data=CALLBACK_MENU_OPEN)],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -610,18 +606,6 @@ async def show_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def show_contents_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
-    flow_id = get_flow_id(context)
-    set_contents_mode(context, True)
-    await send_guarded_message(
-        chat_id,
-        context,
-        flow_id,
-        "Выбери этап:",
-        reply_markup=build_contents_inline_keyboard(context),
-    )
-
-
 async def show_stage_1_contents_menu(
     chat_id: int, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -646,7 +630,7 @@ async def show_stage2_chapters_menu(chat_id: int, context: ContextTypes.DEFAULT_
             chat_id,
             context,
             flow_id,
-            "Этап 2. Пересказ пока не содержит эпизодов.",
+            "2. Пересказ пока не содержит эпизодов.",
         )
         return
 
@@ -810,7 +794,7 @@ async def send_stage2_chapter(
         chat_id,
         context,
         flow_id,
-        "Когда будешь готов, нажми «*Продолжить».",
+        "Когда будешь готов, нажми «Продолжить».",
         reply_markup=build_stage2_continue_inline_keyboard(),
     )
 
@@ -861,7 +845,7 @@ async def show_stage3_episodes_menu(chat_id: int, context: ContextTypes.DEFAULT_
             chat_id,
             context,
             flow_id,
-            "Этап 3. Цитаты пока не содержит эпизодов.",
+            "3. С цитатами пока не содержит эпизодов.",
         )
         return
 
@@ -1082,34 +1066,6 @@ async def handle_user_response(
         await show_menu(chat_id, context)
         return
 
-    if text.startswith("*"):
-        flow_id = interrupt_flow(context)
-        current_stage, _, _, _ = get_dialog_state(context, user_id)
-        logger.info("[DEBUG] star command received: %s", text)
-        lowered_text = text.lower()
-        if "содержание" in lowered_text:
-            start_flow_task(context, show_contents_menu(chat_id, context))
-            return
-        if "эпизод" in lowered_text and current_stage == STAGE_3:
-            save_stage3_progress(user_id, None, 0, STAGE3_MODE_EPISODES)
-            set_stage3_state(context, episode_id=None, step=0, mode=STAGE3_MODE_EPISODES)
-            start_flow_task(context, show_stage3_episodes_menu(chat_id, context))
-            return
-        if "продолж" in lowered_text and current_stage == STAGE_3:
-            episode_id, _, mode = get_stage3_state(context, user_id)
-            if mode == STAGE3_MODE_POST_FEEDBACK_NAVIGATION and episode_id:
-                next_episode_id = get_next_stage3_episode_id(context, episode_id)
-                if next_episode_id:
-                    start_flow_task(context, send_stage3_episode(chat_id, context, user_id, next_episode_id, flow_id))
-                    return
-            if mode == STAGE3_MODE_OPEN_QUESTION and episode_id:
-                start_flow_task(context, send_stage3_open_question(chat_id, context, user_id, episode_id, flow_id))
-                return
-            start_flow_task(context, show_stage3_episodes_menu(chat_id, context))
-            return
-        await send_guarded_message(chat_id, context, flow_id, "Открою меню, чтобы не принять служебную команду за ответ.")
-        start_flow_task(context, show_menu(chat_id, context))
-        return
     progress = get_user_progress(user_id)
     current_stage, block_id, question_index, awaiting_answer = get_dialog_state(context, user_id)
 
@@ -1129,7 +1085,7 @@ async def handle_user_response(
                     chat_id,
                     context,
                     flow_id,
-                    "Нажми «*Продолжить», когда будешь готов перейти к вопросам.",
+                    "Нажми «Продолжить», когда будешь готов перейти к вопросам.",
                     reply_markup=build_stage2_continue_inline_keyboard(),
                 )
                 return
@@ -1390,11 +1346,19 @@ async def handle_user_response(
             [*recent_replies, reply_text]
         )
 
-        sent = await send_guarded_message(chat_id, context, flow_id, reply_text)
+        next_question_index = question_index + 1
+        is_block_finished = next_question_index >= len(block["questions"])
+        reply_markup = build_menu_only_inline_keyboard() if is_block_finished else None
+        sent = await send_guarded_message(
+            chat_id,
+            context,
+            flow_id,
+            reply_text,
+            reply_markup=reply_markup,
+        )
         if not sent:
             return
 
-        next_question_index = question_index + 1
         if next_question_index < len(block["questions"]):
             save_user_progress(user_id, block_id, next_question_index)
             set_dialog_state(
@@ -1428,6 +1392,7 @@ async def handle_user_response(
                 context,
                 flow_id,
                 "Это был последний блок. Если хочешь пройти всё заново, открой меню.",
+                reply_markup=build_menu_only_inline_keyboard(),
             )
             return
 
@@ -1617,6 +1582,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
         return
 
+    if data == CALLBACK_MENU_HELP:
+        flow_id = interrupt_flow(context)
+        logger.info("[DEBUG] callback received: help")
+        help_text = 'ℹ️ Как пользоваться ботом\n\n1. Выбери этап:\n   — 1. Герои и сюжет — чтобы понять, кто есть кто\n   — 2. Пересказ — чтобы разобраться в событиях\n   — 3. С цитатами — чтобы углубить понимание\n\n2. Читай сцены последовательно и отвечай на вопросы\n   Бот поможет, если ответ неточный\n\n3. Используй:\n   — «Продолжить» — чтобы вернуться к последнему месту\n   — «Начать заново» — чтобы пройти всё с начала\n   — «Меню» — чтобы выбрать другой раздел\n\n4. Можно проходить в своём темпе\n   Лучше идти по порядку: 1 → 2 → 3'
+        await send_guarded_message(
+            query.message.chat_id,
+            context,
+            flow_id,
+            help_text,
+            reply_markup=build_menu_only_inline_keyboard(),
+        )
+        return
+
     if data == CALLBACK_MENU_RESTART:
         flow_id = interrupt_flow(context)
         user_id = update.effective_user.id
@@ -1640,10 +1618,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         start_flow_task(context, send_block(query.message.chat_id, context, "intro", flow_id))
         return
 
-    if data == CALLBACK_MENU_CONTENTS:
+    if data == CALLBACK_MENU_OPEN:
         flow_id = interrupt_flow(context)
-        logger.info("[DEBUG] callback received: menu_contents")
-        start_flow_task(context, show_contents_menu(query.message.chat_id, context))
+        logger.info("[DEBUG] callback received: menu_open")
+        await send_guarded_message(
+            query.message.chat_id,
+            context,
+            flow_id,
+            "Открываю меню 👇",
+        )
+        start_flow_task(context, show_menu(query.message.chat_id, context))
         return
 
     if data.startswith(STAGE_CALLBACK_PREFIX):
@@ -1692,23 +1676,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             start_flow_task(context, show_stage3_episodes_menu(query.message.chat_id, context))
             return
 
-        if stage_id in STAGE_PLACEHOLDERS:
-            save_user_progress(user_id, None, 0, stage_id)
-            set_current_stage(context, stage_id)
-            set_dialog_state(
-                context,
-                current_stage=stage_id,
-                current_block=None,
-                question_index=0,
-                awaiting_answer=False,
-            )
-            await send_guarded_message(
-                query.message.chat_id,
-                context,
-                flow_id,
-                STAGE_PLACEHOLDERS[stage_id],
-            )
-            return
 
         await send_guarded_message(
             query.message.chat_id,
@@ -1730,7 +1697,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 query.message.chat_id,
                 context,
                 flow_id,
-                "Такой главы нет. Открой содержание и выбери главу из списка.",
+                "Такой главы нет. Открой меню и выбери главу из списка.",
             )
             return
 
@@ -1828,7 +1795,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 query.message.chat_id,
                 context,
                 flow_id,
-                "Этап 2 завершён. Можно вернуться к списку эпизодов.",
+                "2. Пересказ завершён. Можно вернуться к списку эпизодов.",
             )
             start_flow_task(context, show_stage2_chapters_menu(query.message.chat_id, context))
             return
@@ -1854,16 +1821,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         start_flow_task(context, show_stage2_chapters_menu(query.message.chat_id, context))
         return
 
-    if data == CALLBACK_STAGE2_MENU:
-        flow_id = interrupt_flow(context)
-        await send_guarded_message(
-            query.message.chat_id,
-            context,
-            flow_id,
-            "Открываю меню 👇",
-        )
-        start_flow_task(context, show_menu(query.message.chat_id, context))
-        return
 
     if data.startswith(STAGE3_EPISODE_PREFIX):
         episode_id = data[len(STAGE3_EPISODE_PREFIX) :]
@@ -1897,7 +1854,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 query.message.chat_id,
                 context,
                 flow_id,
-                "Этап 3 уже завершён. Открою список эпизодов.",
+                "3. С цитатами уже завершён. Открою список эпизодов.",
             )
             start_flow_task(context, show_stage3_episodes_menu(query.message.chat_id, context))
             return

@@ -1,16 +1,16 @@
 {
   "234115470": {
     "current_stage": "stage_3",
-    "current_block": "post_feedback_navigation",
+    "current_block": "episodes",
     "question_index": 0,
     "current_work": "captains_daughter",
-    "current_episode": "stage3_episode_13",
-    "current_step": 3,
-    "current_stage3_block": "post_feedback_navigation",
-    "current_question_type": "post_feedback_navigation",
-    "current_attempt_state": "post_feedback_navigation",
-    "current_episode_id": "stage3_episode_13",
-    "current_mode": "post_feedback_navigation"
+    "current_episode": null,
+    "current_step": 0,
+    "current_stage3_block": "episodes",
+    "current_question_type": "episodes",
+    "current_attempt_state": "episodes",
+    "current_episode_id": null,
+    "current_mode": "episodes"
   },
   "6591882915": {
     "current_block": null,
