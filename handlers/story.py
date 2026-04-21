@@ -57,6 +57,7 @@ STAGE2_MODE_FINISHED_CHAPTER = "finished_chapter"
 CALLBACK_MENU_CONTINUE = "menu_continue"
 CALLBACK_MENU_HELP = "help"
 CALLBACK_MENU_OPEN = "menu_open"
+CALLBACK_MENU_ORIGINAL = "original"
 STAGE_CALLBACK_PREFIX = "select_"
 BLOCK_CALLBACK_PREFIX = "jump_"
 STAGE2_CHAPTER_PREFIX = "stage2_chapter_"
@@ -378,6 +379,7 @@ def build_menu_inline_keyboard() -> InlineKeyboardMarkup:
             ]
             for stage_id, title in STAGE_TITLES.items()
         ],
+        [InlineKeyboardButton("📖 Оригинал книги", callback_data=CALLBACK_MENU_ORIGINAL)],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -515,15 +517,14 @@ def get_question_status(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str
 
 
 def is_substantial_open_answer(user_answer: str, answer_type: str) -> bool:
-    if answer_type == "dont_know":
-        return False
-
     normalized = sanitize_user_answer(user_answer).lower()
     words = [word for word in normalized.split() if any(char.isalpha() for char in word)]
     letters = [char for char in normalized if char.isalpha()]
-    if len(words) >= 4:
+    if answer_type == "dont_know":
         return True
-    return len(words) >= 3 and len(letters) >= 18
+    if words:
+        return True
+    return len(letters) >= 3
 
 
 def answer_uses_allowed_points(user_answer: str, allowed_points=None) -> bool:
@@ -559,15 +560,19 @@ def evaluate_answer_result(
     requires_correct: bool = False,
     allowed_points=None,
 ) -> dict:
+    reached_attempt_limit = attempt_count >= MAX_QUESTION_ATTEMPTS
     if requires_correct:
-        is_correct_enough = bool(is_correct)
+        is_correct_enough = bool(is_correct) or reached_attempt_limit
     else:
+        is_substantial = is_substantial_open_answer(user_answer, answer_type)
         is_correct_enough = (
-            is_substantial_open_answer(user_answer, answer_type)
-            and answer_uses_allowed_points(user_answer, allowed_points)
+            is_substantial
+            and (
+                answer_uses_allowed_points(user_answer, allowed_points)
+                or bool(sanitize_user_answer(user_answer))
+            )
         )
 
-    reached_attempt_limit = attempt_count >= MAX_QUESTION_ATTEMPTS
     advance_allowed = is_correct_enough
     return {
         "is_correct_enough": is_correct_enough,
@@ -1393,7 +1398,7 @@ async def skip_current_step(
     flow_id: str,
 ) -> None:
     logger.info("[DEBUG] stop command detected")
-    sent = await send_guarded_message(chat_id, context, flow_id, "Ок, идём дальше")
+    sent = await send_guarded_message(chat_id, context, flow_id, "Ок, пропускаем этот вопрос.")
     if not sent:
         return
 
@@ -1602,7 +1607,7 @@ async def handle_user_response(
             if evaluation["reached_attempt_limit"] and not is_correct:
                 direction = (
                     f"{direction} Если ученик всё ещё не попал в точный смысл, "
-                    "дай более прямую подсказку, но не переводи к следующему шагу."
+                    "коротко объясни главное без давления и помоги спокойно завершить шаг."
                 )
             reply_text, should_use_llm, used_llm, guided_answer_type = await generate_guided_reply(
                 context_title=str(chapter.get("title") or get_stage2_chapter_label(chapter)),
@@ -1689,7 +1694,7 @@ async def handle_user_response(
             forbidden_future_context=fragment_context["forbidden_future_context"],
             answer_options=step.get("options") or [],
             selected_answer=get_stage2_selected_answer(step, selected_index),
-            is_correct=None,
+            is_correct=evaluation["advance_allowed"],
             recent_replies=recent_replies,
         )
         logger.info("[DEBUG] stage2_personal_guided_answer_type=%s", guided_answer_type)
@@ -1895,7 +1900,7 @@ async def handle_user_response(
         if evaluation["reached_attempt_limit"] and not evaluation["is_correct_enough"]:
             direction = (
                 f"{direction} Если ученик всё ещё затрудняется, коротко подведи итог "
-                "и дай более конкретную опору, но не переводи к следующему вопросу."
+                "и дай более конкретную опору, чтобы спокойно завершить шаг."
             )
         reply_text, should_use_llm, used_llm, _ = await generate_guided_reply(
             context_title=get_block_title(block),
@@ -1906,6 +1911,7 @@ async def handle_user_response(
             learning_goal=fragment_context["learning_goal"],
             allowed_points=fragment_context["allowed_points"],
             forbidden_future_context=fragment_context["forbidden_future_context"],
+            is_correct=evaluation["advance_allowed"],
             recent_replies=recent_replies,
         )
 
@@ -2210,6 +2216,24 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             context,
             flow_id,
             help_text,
+            reply_markup=build_menu_only_inline_keyboard(),
+        )
+        return
+
+    if data == CALLBACK_MENU_ORIGINAL:
+        flow_id = interrupt_flow(context)
+        logger.info("[DEBUG] callback received: original")
+        original_text = (
+            "Ты уже здорово разобрался в истории и героях.\n"
+            "Теперь читать оригинал будет намного легче и интереснее.\n\n"
+            "Попробуй прочитать книгу целиком:\n\n"
+            "https://ilibrary.ru/text/107/p.1/index.html"
+        )
+        await send_guarded_message(
+            query.message.chat_id,
+            context,
+            flow_id,
+            original_text,
             reply_markup=build_menu_only_inline_keyboard(),
         )
         return
