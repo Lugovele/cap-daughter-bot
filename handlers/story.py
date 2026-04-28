@@ -39,8 +39,14 @@ STOP_COMMANDS = {"стоп", "stop"}
 ATTEMPT_COUNT_KEY = "attempt_count"
 QUESTION_STATUS_KEY = "question_status"
 QUESTION_STATUS_WAITING = "waiting_user_answer"
+QUESTION_STATUS_WAITING_CHOICE = "waiting_choice_answer"
 QUESTION_STATUS_AI_FOLLOWUP = "ai_followup_sent"
 QUESTION_STATUS_COMPLETED = "completed"
+CURRENT_QUESTION_TEXT_KEY = "current_question"
+CURRENT_QUESTION_TYPE_KEY = "current_question_type"
+CURRENT_QUESTION_ID_KEY = "current_question_id"
+CHOICE_OPTIONS_KEY = "current_choice_options"
+QUESTION_TYPE_CHOICE = "choice"
 MAX_QUESTION_ATTEMPTS = 2
 CURRENT_STAGE_KEY = "current_stage"
 CURRENT_BLOCK_KEY = "current_block"
@@ -241,8 +247,9 @@ def parse_stage2_option_answer(user_answer: str, options: list[str]) -> int | No
     if not normalized:
         return None
 
-    if normalized.isdigit():
-        option_index = int(normalized) - 1
+    digit_candidate = normalized.rstrip(').:')
+    if digit_candidate.isdigit():
+        option_index = int(digit_candidate) - 1
         if 0 <= option_index < len(options):
             return option_index
 
@@ -250,7 +257,12 @@ def parse_stage2_option_answer(user_answer: str, options: list[str]) -> int | No
         option_text = str(option).strip().lower()
         if normalized == option_text:
             return index
-        if normalized in {f"{index + 1}. {option_text}", f"{index + 1}) {option_text}"}:
+        if normalized in {
+            f"{index + 1}. {option_text}",
+            f"{index + 1}) {option_text}",
+            f"{index + 1}:{option_text}",
+            f"{index + 1} {option_text}",
+        }:
             return index
 
     return None
@@ -260,6 +272,28 @@ def get_stage2_question_text(question_obj) -> str:
     if isinstance(question_obj, dict):
         return str(question_obj.get("q", "")).strip()
     return str(question_obj).strip()
+
+
+def get_stage2_selected_answer(step: dict, selected_index: int | None) -> str:
+    if selected_index is None:
+        return ""
+
+    options = step.get("options") or []
+    if 0 <= selected_index < len(options):
+        return str(options[selected_index]).strip()
+    return ""
+
+
+def get_stage2_wrong_response(step: dict, selected_index: int | None) -> dict:
+    wrong_responses = step.get("wrong_responses") or {}
+    if selected_index is None:
+        return {}
+
+    return (
+        wrong_responses.get(str(selected_index))
+        or wrong_responses.get(selected_index)
+        or {}
+    )
 
 
 def get_stage2_question_hint(chapter: dict, question_index: int) -> str:
@@ -386,7 +420,13 @@ def build_menu_inline_keyboard() -> InlineKeyboardMarkup:
 
 def build_menu_only_inline_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("Меню", callback_data=CALLBACK_MENU_OPEN)]]
+        [[InlineKeyboardButton("????", callback_data=CALLBACK_MENU_OPEN)]]
+    )
+
+
+def build_stage1_to_stage2_inline_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Перейти к пересказу", callback_data=f"{STAGE_CALLBACK_PREFIX}{STAGE_2}")]]
     )
 
 
@@ -516,6 +556,36 @@ def get_question_status(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str
     )
 
 
+def get_current_question_type(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
+    progress = get_user_progress(user_id) or {}
+    return str(
+        context.user_data.get(
+            CURRENT_QUESTION_TYPE_KEY,
+            progress.get("current_question_type", ""),
+        )
+        or ""
+    )
+
+
+def set_choice_question_state(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    stage_id: str,
+    block_id: str,
+    question_id: int,
+    current_question: str,
+    options: list[str],
+    status: str = QUESTION_STATUS_WAITING_CHOICE,
+) -> None:
+    context.user_data[CURRENT_STAGE_KEY] = stage_id
+    context.user_data[CURRENT_QUESTION_ID_KEY] = question_id
+    context.user_data[CURRENT_QUESTION_TEXT_KEY] = current_question
+    context.user_data[CURRENT_QUESTION_TYPE_KEY] = QUESTION_TYPE_CHOICE
+    context.user_data[CHOICE_OPTIONS_KEY] = [str(option).strip() for option in options]
+    context.user_data[CURRENT_BLOCK_KEY] = block_id
+    context.user_data[QUESTION_STATUS_KEY] = status
+
+
 def is_substantial_open_answer(user_answer: str, answer_type: str) -> bool:
     normalized = sanitize_user_answer(user_answer).lower()
     words = [word for word in normalized.split() if any(char.isalpha() for char in word)]
@@ -635,6 +705,50 @@ def get_stage2_state(
         or STAGE2_MODE_CHAPTERS,
     )
     return chapter_id, question_index, mode
+
+
+def save_stage2_next_position(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    chapter_id: str,
+    next_step_index: int,
+) -> None:
+    step_count = len(get_stage2_steps(get_stage2_chapter_map(context)[chapter_id]))
+    if next_step_index >= step_count:
+        set_stage2_state(
+            context,
+            chapter_id=chapter_id,
+            question_index=step_count,
+            mode=STAGE2_MODE_FINISHED_CHAPTER,
+            attempt_count=0,
+            question_status=QUESTION_STATUS_COMPLETED,
+        )
+        save_stage2_progress(
+            user_id,
+            chapter_id,
+            step_count,
+            STAGE2_MODE_FINISHED_CHAPTER,
+            attempt_count=0,
+            question_status=QUESTION_STATUS_COMPLETED,
+        )
+        return
+
+    set_stage2_state(
+        context,
+        chapter_id=chapter_id,
+        question_index=next_step_index,
+        mode=STAGE2_MODE_AWAITING_ANSWER,
+        attempt_count=0,
+        question_status=QUESTION_STATUS_WAITING_CHOICE,
+    )
+    save_stage2_progress(
+        user_id,
+        chapter_id,
+        next_step_index,
+        STAGE2_MODE_AWAITING_ANSWER,
+        attempt_count=0,
+        question_status=QUESTION_STATUS_WAITING_CHOICE,
+    )
 
 
 def set_stage3_state(
@@ -863,16 +977,26 @@ async def send_stage2_question(
         question_index=safe_index,
         mode=STAGE2_MODE_AWAITING_ANSWER,
         attempt_count=0,
-        question_status=QUESTION_STATUS_WAITING,
+        question_status=QUESTION_STATUS_WAITING_CHOICE,
     )
     save_stage2_progress(
         user_id,
         chapter_id,
         safe_index,
         STAGE2_MODE_AWAITING_ANSWER,
-        question_status=QUESTION_STATUS_WAITING,
+        question_status=QUESTION_STATUS_WAITING_CHOICE,
     )
     question_text = get_stage2_question_text(questions[safe_index])
+    set_choice_question_state(
+        context,
+        stage_id=STAGE_2,
+        block_id=chapter_id,
+        question_id=safe_index,
+        current_question=question_text,
+        options=[],
+        status=QUESTION_STATUS_WAITING_CHOICE,
+    )
+    logger.info("[DEBUG] choice question sent stage=%s block=%s question_id=%s status=%s", STAGE_2, chapter_id, safe_index, QUESTION_STATUS_WAITING_CHOICE)
     if not question_text:
         await send_guarded_message(
             chat_id,
@@ -906,11 +1030,7 @@ async def send_stage2_step(
 
     step = steps[step_index]
     attempt_count = 0 if reset_attempts else get_attempt_count(context, user_id)
-    question_status = (
-        QUESTION_STATUS_WAITING
-        if reset_attempts
-        else get_question_status(context, user_id)
-    )
+    question_status = QUESTION_STATUS_WAITING_CHOICE
     set_stage2_state(
         context,
         chapter_id=chapter_id,
@@ -919,6 +1039,16 @@ async def send_stage2_step(
         attempt_count=attempt_count,
         question_status=question_status,
     )
+    question_text = format_stage2_question(step["prompt"], step["options"])
+    set_choice_question_state(
+        context,
+        stage_id=STAGE_2,
+        block_id=chapter_id,
+        question_id=step_index,
+        current_question=question_text,
+        options=step["options"],
+        status=QUESTION_STATUS_WAITING_CHOICE,
+    )
     save_stage2_progress(
         user_id,
         chapter_id,
@@ -926,12 +1056,16 @@ async def send_stage2_step(
         STAGE2_MODE_AWAITING_ANSWER,
         attempt_count=attempt_count,
         question_status=question_status,
+        current_question=question_text,
+        question_type=QUESTION_TYPE_CHOICE,
+        current_block_id=chapter_id,
     )
+    logger.info("[DEBUG] choice question sent stage=%s block=%s question_id=%s status=%s", STAGE_2, chapter_id, step_index, question_status)
     await send_guarded_message(
         chat_id,
         context,
         flow_id,
-        format_stage2_question(step["prompt"], step["options"]),
+        question_text,
     )
 
 
@@ -989,16 +1123,17 @@ async def send_stage2_chapter(
         context,
         chapter_id=chapter_id,
         question_index=0,
-        mode=STAGE2_MODE_SCENE,
+        mode=STAGE2_MODE_AWAITING_ANSWER,
         attempt_count=0,
-        question_status=QUESTION_STATUS_WAITING,
+        question_status=QUESTION_STATUS_WAITING_CHOICE,
     )
     save_stage2_progress(
         user_id,
         chapter_id,
         0,
-        STAGE2_MODE_SCENE,
-        question_status=QUESTION_STATUS_WAITING,
+        STAGE2_MODE_AWAITING_ANSWER,
+        question_status=QUESTION_STATUS_WAITING_CHOICE,
+        current_block_id=chapter_id,
     )
 
     sent = await send_guarded_message(chat_id, context, flow_id, chapter["title"])
@@ -1018,13 +1153,7 @@ async def send_stage2_chapter(
         if not sent:
             return
 
-    await send_guarded_message(
-        chat_id,
-        context,
-        flow_id,
-        "Когда будешь готов, нажми «Продолжить».",
-        reply_markup=build_stage2_continue_inline_keyboard(),
-    )
+    await send_stage2_step(chat_id, context, user_id, chapter_id, 0, flow_id)
 
 
 def get_next_stage2_chapter_id(context: ContextTypes.DEFAULT_TYPE, chapter_id: str) -> str | None:
@@ -1096,11 +1225,7 @@ async def send_stage3_open_question(
 ) -> None:
     episode = get_stage3_episode_map(context)[episode_id]
     attempt_count = 0 if reset_attempts else get_attempt_count(context, user_id)
-    question_status = (
-        QUESTION_STATUS_WAITING
-        if reset_attempts
-        else get_question_status(context, user_id)
-    )
+    question_status = QUESTION_STATUS_WAITING_CHOICE
     set_stage3_state(
         context,
         episode_id=episode_id,
@@ -1364,7 +1489,8 @@ async def skip_stage1_question(
             chat_id,
             context,
             flow_id,
-            "Это был последний блок. Если хочешь пройти всё заново, открой меню.",
+            "Ты уже увидел, как разворачиваются события и познакомился с героями.\n\nТеперь разберём эту же историю глубже — посмотрим на события внимательнее и попробуем лучше понять, что за ними стоит.\n\nПереходим ко второму этапу — пересказу.",
+                reply_markup=build_stage1_to_stage2_inline_keyboard(),
         )
         return
 
@@ -1409,22 +1535,7 @@ async def skip_current_step(
             return
 
         if mode == STAGE2_MODE_AWAITING_ANSWER:
-            set_stage2_state(
-                context,
-                chapter_id=chapter_id,
-                question_index=stage2_step_index,
-                mode=STAGE2_MODE_AWAITING_ANSWER,
-                attempt_count=0,
-                question_status=QUESTION_STATUS_COMPLETED,
-            )
-            save_stage2_progress(
-                user_id,
-                chapter_id,
-                stage2_step_index,
-                STAGE2_MODE_AWAITING_ANSWER,
-                attempt_count=0,
-                question_status=QUESTION_STATUS_COMPLETED,
-            )
+            save_stage2_next_position(context, user_id, chapter_id, stage2_step_index + 1)
             await send_stage2_step(
                 chat_id,
                 context,
@@ -1436,6 +1547,7 @@ async def skip_current_step(
             return
 
         if mode == STAGE2_MODE_SCENE:
+            save_stage2_next_position(context, user_id, chapter_id, 0)
             await send_stage2_step(chat_id, context, user_id, chapter_id, 0, flow_id)
             return
 
@@ -1513,25 +1625,44 @@ async def handle_user_response(
         )
         return
 
-    if current_stage == STAGE_2:
+    stage2_question_status = get_question_status(context, user_id)
+    current_question_type = get_current_question_type(context, user_id)
+    stage2_progress_active = bool(
+        progress
+        and progress.get("current_stage") == STAGE_2
+        and progress.get("current_mode") == STAGE2_MODE_AWAITING_ANSWER
+    )
+    waiting_choice_answer = stage2_question_status == QUESTION_STATUS_WAITING_CHOICE and (
+        current_question_type == QUESTION_TYPE_CHOICE or current_stage == STAGE_2 or stage2_progress_active
+    )
+
+    if waiting_choice_answer:
+        logger.info(
+            "[DEBUG] choice answer received user_answer=%s stage=%s status=%s question_type=%s handler=stage2_choice",
+            text,
+            current_stage,
+            stage2_question_status,
+            current_question_type,
+        )
+
+    if current_stage == STAGE_2 or stage2_progress_active:
         flow_id = interrupt_flow(context)
         chapter_id, stage2_step_index, mode = get_stage2_state(context, user_id)
         logger.info(
-            "[DEBUG] stage2 answer chapter=%s step=%s mode=%s",
+            "[DEBUG] stage2 answer chapter=%s step=%s mode=%s question_status=%s",
             chapter_id,
             stage2_step_index,
             mode,
+            stage2_question_status,
         )
 
-        if mode != STAGE2_MODE_AWAITING_ANSWER or not chapter_id:
+        if (
+            mode != STAGE2_MODE_AWAITING_ANSWER
+            and stage2_question_status != QUESTION_STATUS_WAITING_CHOICE
+        ) or not chapter_id:
             if mode == STAGE2_MODE_SCENE and chapter_id:
-                await send_guarded_message(
-                    chat_id,
-                    context,
-                    flow_id,
-                    "Нажми «Продолжить», когда будешь готов перейти к вопросам.",
-                    reply_markup=build_stage2_continue_inline_keyboard(),
-                )
+                save_stage2_next_position(context, user_id, chapter_id, 0)
+                await send_stage2_step(chat_id, context, user_id, chapter_id, 0, flow_id)
                 return
 
             if mode == STAGE2_MODE_FINISHED_CHAPTER and chapter_id:
@@ -1567,12 +1698,13 @@ async def handle_user_response(
 
         step = steps[stage2_step_index]
         selected_index = parse_stage2_option_answer(text, step["options"])
+        logger.info("[DEBUG] stage2 selected_index=%s user_answer=%s", selected_index, text)
         if selected_index is None:
             sent = await send_guarded_message(
                 chat_id,
                 context,
                 flow_id,
-                "Выбери, пожалуйста, один из вариантов: можно написать номер или текст ответа.",
+                "Выбери один из вариантов: 1, 2 или 3.",
             )
             if not sent:
                 return
@@ -1586,53 +1718,20 @@ async def handle_user_response(
 
         if step["type"] in {"meaning", "line"}:
             is_correct = selected_index == step["correct"]
-            fragment_context = get_stage2_fragment_context(chapter, step)
-            attempt_count = increase_attempt_count(context, user_id)
-            evaluation = evaluate_answer_result(
-                user_answer=text,
-                answer_type=detect_answer_type(text),
-                attempt_count=attempt_count,
-                is_correct=is_correct,
-                requires_correct=True,
-                allowed_points=fragment_context["allowed_points"],
-            )
-            logger.info(
-                "[DEBUG] stage2 advance_allowed=%s attempt_count=%s status=%s",
-                evaluation["advance_allowed"],
-                attempt_count,
-                evaluation["status"],
-            )
-            recent_replies = trim_recent_replies(context.user_data.get(RECENT_REPLIES_KEY))
-            direction = get_stage2_correct_direction(step)
-            if evaluation["reached_attempt_limit"] and not is_correct:
-                direction = (
-                    f"{direction} Если ученик всё ещё не попал в точный смысл, "
-                    "коротко объясни главное без давления и помоги спокойно завершить шаг."
-                )
-            reply_text, should_use_llm, used_llm, guided_answer_type = await generate_guided_reply(
-                context_title=str(chapter.get("title") or get_stage2_chapter_label(chapter)),
-                context_text=fragment_context["shown_text"],
-                question=fragment_context["question"],
-                user_answer=text,
-                correct_direction=direction,
-                learning_goal=fragment_context["learning_goal"],
-                allowed_points=fragment_context["allowed_points"],
-                forbidden_future_context=fragment_context["forbidden_future_context"],
-                answer_options=step.get("options") or [],
-                selected_answer=get_stage2_selected_answer(step, selected_index),
-                is_correct=is_correct,
-                recent_replies=recent_replies,
-            )
-            logger.info("[DEBUG] stage2_guided_answer_type=%s", guided_answer_type)
-            logger.info("[DEBUG] stage2_guided_using_llm=%s", used_llm)
-            context.user_data[RECENT_REPLIES_KEY] = trim_recent_replies([*recent_replies, reply_text])
+            logger.info("[DEBUG] stage2 choice handled type=%s is_correct=%s handler=stage2_choice", step["type"], is_correct)
 
-            sent = await send_guarded_message(chat_id, context, flow_id, reply_text)
-            if not sent:
-                return
+            if is_correct:
+                reaction_parts = [
+                    str(step.get("correct_reaction") or "").strip(),
+                    str(step.get("correct_explanation") or "").strip(),
+                ]
+                reply_text = "\n".join(part for part in reaction_parts if part)
+                sent = await send_guarded_message(chat_id, context, flow_id, reply_text)
+                if not sent:
+                    return
 
-            if evaluation["advance_allowed"]:
                 set_question_status(context, QUESTION_STATUS_COMPLETED)
+                save_stage2_next_position(context, user_id, chapter_id, stage2_step_index + 1)
                 await send_stage2_step(
                     chat_id,
                     context,
@@ -1643,89 +1742,64 @@ async def handle_user_response(
                 )
                 return
 
+            wrong_response = get_stage2_wrong_response(step, selected_index)
+            reaction_parts = [
+                str(wrong_response.get("reaction") or step.get("wrong_reaction") or "").strip(),
+                str(wrong_response.get("guidance") or step.get("wrong_hint") or "").strip(),
+                str(wrong_response.get("retry_prompt") or step.get("retry_prompt") or "Выбери один ответ ещё раз.").strip(),
+            ]
+            reply_text = "\n".join(part for part in reaction_parts if part)
+            sent = await send_guarded_message(chat_id, context, flow_id, reply_text)
+            if not sent:
+                return
+
             set_stage2_state(
                 context,
                 chapter_id=chapter_id,
                 question_index=stage2_step_index,
                 mode=STAGE2_MODE_AWAITING_ANSWER,
-                attempt_count=attempt_count,
-                question_status=QUESTION_STATUS_AI_FOLLOWUP,
+                attempt_count=0,
+                question_status=QUESTION_STATUS_WAITING_CHOICE,
             )
             save_stage2_progress(
                 user_id,
                 chapter_id,
                 stage2_step_index,
                 STAGE2_MODE_AWAITING_ANSWER,
-                attempt_count=attempt_count,
-                question_status=QUESTION_STATUS_AI_FOLLOWUP,
+                attempt_count=0,
+                question_status=QUESTION_STATUS_WAITING_CHOICE,
+                current_question=format_stage2_question(step["prompt"], step["options"]),
+                question_type=QUESTION_TYPE_CHOICE,
+                current_block_id=chapter_id,
+            )
+            sent = await send_guarded_message(
+                chat_id,
+                context,
+                flow_id,
+                format_stage2_question(step["prompt"], step["options"]),
             )
             return
 
-        answer_type = detect_answer_type(text)
-        fragment_context = get_stage2_fragment_context(chapter, step)
-        attempt_count = increase_attempt_count(context, user_id)
-        evaluation = evaluate_answer_result(
-            user_answer=get_stage2_selected_answer(step, selected_index) or text,
-            answer_type=answer_type,
-            attempt_count=attempt_count,
-            allowed_points=fragment_context["allowed_points"],
-        )
-        logger.info(
-            "[DEBUG] stage2 personal advance_allowed=%s attempt_count=%s status=%s",
-            evaluation["advance_allowed"],
-            attempt_count,
-            evaluation["status"],
-        )
-        recent_replies = trim_recent_replies(context.user_data.get(RECENT_REPLIES_KEY))
-        personal_direction = "Помочь ученику связать личный выбор с тем, что происходит с героем и как это меняет его понимание."
-        if evaluation["reached_attempt_limit"] and not evaluation["is_correct_enough"]:
-            personal_direction = (
-                f"{personal_direction} Если ответ всё ещё слишком общий, коротко подведи итог "
-                "и дай более конкретную опору, но не завершай шаг."
-            )
-        reply_text, should_use_llm, used_llm, guided_answer_type = await generate_guided_reply(
-            context_title=str(chapter.get("title") or get_stage2_chapter_label(chapter)),
-            context_text=fragment_context["shown_text"],
-            question=fragment_context["question"],
-            user_answer=text,
-            correct_direction=personal_direction,
-            learning_goal=fragment_context["learning_goal"],
-            allowed_points=fragment_context["allowed_points"],
-            forbidden_future_context=fragment_context["forbidden_future_context"],
-            answer_options=step.get("options") or [],
-            selected_answer=get_stage2_selected_answer(step, selected_index),
-            is_correct=evaluation["advance_allowed"],
-            recent_replies=recent_replies,
-        )
-        logger.info("[DEBUG] stage2_personal_guided_answer_type=%s", guided_answer_type)
-        logger.info("[DEBUG] stage2_personal_guided_using_llm=%s", used_llm)
-        context.user_data[RECENT_REPLIES_KEY] = trim_recent_replies([*recent_replies, reply_text])
-
+        selected_answer = get_stage2_selected_answer(step, selected_index)
+        reaction_map = step.get("reaction_map") or {}
+        reply_text = str(
+            reaction_map.get(str(selected_index))
+            or reaction_map.get(selected_index)
+            or "Понял. Здесь важно связать свой выбор с тем, что происходит с героем."
+        ).strip()
+        logger.info("[DEBUG] stage2 choice handled type=%s selected_index=%s handler=stage2_choice", step["type"], selected_index)
         sent = await send_guarded_message(chat_id, context, flow_id, reply_text)
         if not sent:
             return
 
-        if evaluation["advance_allowed"]:
-            set_question_status(context, QUESTION_STATUS_COMPLETED)
-            await send_stage2_takeaway(chat_id, context, user_id, chapter_id, flow_id)
-            return
-
-        set_stage2_state(
+        set_question_status(context, QUESTION_STATUS_COMPLETED)
+        save_stage2_next_position(
             context,
-            chapter_id=chapter_id,
-            question_index=stage2_step_index,
-            mode=STAGE2_MODE_AWAITING_ANSWER,
-            attempt_count=attempt_count,
-            question_status=QUESTION_STATUS_AI_FOLLOWUP,
-        )
-        save_stage2_progress(
             user_id,
             chapter_id,
-            stage2_step_index,
-            STAGE2_MODE_AWAITING_ANSWER,
-            attempt_count=attempt_count,
-            question_status=QUESTION_STATUS_AI_FOLLOWUP,
+            len(get_stage2_steps(chapter)),
         )
+        await send_stage2_takeaway(chat_id, context, user_id, chapter_id, flow_id)
         return
 
     if current_stage == STAGE_3:
@@ -2003,7 +2077,8 @@ async def handle_user_response(
                 chat_id,
                 context,
                 flow_id,
-                "Это был последний блок. Если хочешь пройти всё заново, открой меню.",
+                "Ты уже увидел, как разворачиваются события и познакомился с героями.\n\nТеперь разберём эту же историю глубже — посмотрим на события внимательнее и попробуем лучше понять, что за ними стоит.\n\nПереходим ко второму этапу — пересказу.",
+                reply_markup=build_stage1_to_stage2_inline_keyboard(),
             )
             return
 
@@ -2060,7 +2135,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "Продолжаем 👇",
             )
             if mode in {STAGE2_MODE_SCENE, STAGE2_MODE_AWAITING_ANSWER} and chapter_id:
-                reset_attempts = mode == STAGE2_MODE_SCENE
+                target_step_index = 0 if mode == STAGE2_MODE_SCENE else stage2_step_index
+                if mode == STAGE2_MODE_SCENE:
+                    save_stage2_next_position(context, user_id, chapter_id, 0)
                 start_flow_task(
                     context,
                     send_stage2_step(
@@ -2068,12 +2145,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                         context,
                         user_id,
                         chapter_id,
-                        stage2_step_index,
+                        target_step_index,
                         flow_id,
-                        reset_attempts=reset_attempts,
+                        reset_attempts=False,
                     ),
                 )
                 return
+
             if mode == STAGE2_MODE_FINISHED_CHAPTER and chapter_id:
                 start_flow_task(
                     context,
@@ -2085,6 +2163,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     ),
                 )
                 return
+            await send_guarded_message(
+                query.message.chat_id,
+                context,
+                flow_id,
+                "Прогресс этапа 2 ещё не найден. Открою список эпизодов.",
+            )
             start_flow_task(context, show_stage2_chapters_menu(query.message.chat_id, context))
             return
 
@@ -2394,6 +2478,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         user_id = update.effective_user.id
         chapter_id, stage2_step_index, mode = get_stage2_state(context, user_id)
         if not chapter_id:
+            await send_guarded_message(
+                query.message.chat_id,
+                context,
+                flow_id,
+                "Сначала выбери эпизод этапа 2.",
+            )
             start_flow_task(context, show_stage2_chapters_menu(query.message.chat_id, context))
             return
 
@@ -2420,6 +2510,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             start_flow_task(context, show_stage2_chapters_menu(query.message.chat_id, context))
             return
 
+        target_step_index = 0 if mode == STAGE2_MODE_SCENE else stage2_step_index
+        if mode == STAGE2_MODE_SCENE:
+            save_stage2_next_position(context, user_id, chapter_id, 0)
         start_flow_task(
             context,
             send_stage2_step(
@@ -2427,8 +2520,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 context,
                 user_id,
                 chapter_id,
-                stage2_step_index,
+                target_step_index,
                 flow_id,
+                reset_attempts=False,
             ),
         )
         return

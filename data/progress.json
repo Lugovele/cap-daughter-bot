@@ -1,13 +1,60 @@
 {
   "234115470": {
-    "current_stage": "stage_1",
-    "current_block": "block_5",
+    "current_stage": "stage_3",
+    "current_block": "open_question",
     "question_index": 0,
+    "current_work": "captains_daughter",
+    "current_episode": "stage3_episode_5",
+    "current_step": 1,
+    "current_stage3_block": "open_question",
+    "current_question_type": "open_question",
+    "current_attempt_state": "waiting_choice_answer",
+    "current_episode_id": "stage3_episode_5",
+    "current_mode": "open_question",
+    "attempt_count": 0,
+    "question_status": "waiting_choice_answer"
+  },
+  "6591882915": {
+    "current_stage": "stage_2",
+    "current_block": null,
+    "question_index": 0,
+    "current_work": "captains_daughter",
+    "current_episode": null,
+    "current_step": 0,
+    "current_stage2_block": "chapters",
+    "current_question_type": "choice",
+    "current_attempt_state": "waiting_user_answer",
+    "current_question": null,
+    "current_question_id": 0,
+    "current_block_id": null,
+    "current_chapter_id": null,
+    "current_question_index": 0,
+    "current_mode": "chapters",
     "attempt_count": 0,
     "question_status": "waiting_user_answer"
   },
-  "6591882915": {
+  "376223743": {
+    "current_stage": "stage_1",
     "current_block": null,
     "question_index": 0
+  },
+  "1635463981": {
+    "current_stage": "stage_2",
+    "current_block": "stage2_episode_7",
+    "question_index": 0,
+    "current_work": "captains_daughter",
+    "current_episode": "stage2_episode_7",
+    "current_step": 0,
+    "current_stage2_block": "awaiting_answer",
+    "current_question_type": "choice",
+    "current_attempt_state": "waiting_choice_answer",
+    "current_question": "Что главное видно в этом фрагменте? Выбери вариант, который ближе к тексту.\n\n1. Начинается просто внешняя опасность, но сами герои пока не меняются\n2. Большие события ломают привычную жизнь и сразу проверяют каждого героя\n3. Главное здесь — сделать историю более напряжённой",
+    "current_question_id": 0,
+    "current_block_id": "stage2_episode_7",
+    "current_chapter_id": "stage2_episode_7",
+    "current_question_index": 0,
+    "current_mode": "awaiting_answer",
+    "attempt_count": 0,
+    "question_status": "waiting_choice_answer"
   }
 }
